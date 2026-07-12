@@ -9,6 +9,7 @@ import { ProviderCallError } from '../providers/slip-provider.interface';
 import { ProviderChainService } from '../providers/provider-chain.service';
 import { WebhooksService } from '../webhooks/webhooks.service';
 import { decodeMiniQr, InvalidQrError } from './mini-qr';
+import { accountNumberMatches, receiverNameMatches } from './receiver-match';
 
 export interface VerifyInput {
   payload: string;
@@ -168,15 +169,15 @@ export class VerificationService {
       checks.amount_match = result.amount !== undefined && Math.abs(result.amount - input.expectedAmount) < 0.005;
     }
     if (input.expectedReceiver) {
-      checks.receiver_match = this.accountMatches(input.expectedReceiver, result.receiver?.accountMasked);
+      checks.receiver_match = accountNumberMatches(input.expectedReceiver, result.receiver?.accountMasked);
     } else {
       const accounts = await this.prisma.bankAccount.findMany({
         where: { ...this.prisma.tenantWhere(), active: true },
       });
       if (accounts.length > 0) {
         checks.receiver_match = accounts.some((acc) => {
-          const numberOk = this.accountMatches(acc.accountNumber, result.receiver?.accountMasked);
-          const nameOk = this.nameMatches(result.receiver?.name, acc.accountNameTh, acc.accountNameEn);
+          const numberOk = accountNumberMatches(acc.accountNumber, result.receiver?.accountMasked);
+          const nameOk = receiverNameMatches(result.receiver?.name, acc.accountNameTh, acc.accountNameEn);
           if (acc.verifyMode === 'number') return numberOk;
           if (acc.verifyMode === 'name') return nameOk;
           return numberOk && nameOk;
@@ -184,31 +185,6 @@ export class VerificationService {
       }
     }
     return checks;
-  }
-
-  /** Compare a full/expected account number against the masked value from the bank (x/X = wildcard). */
-  private accountMatches(expected: string, masked?: string): boolean {
-    if (!masked) return false;
-    const exp = expected.replace(/[^0-9]/g, '');
-    const mask = masked.replace(/[^0-9xX]/g, '');
-    if (!exp || !mask || exp.length < mask.length) return false;
-    const tail = exp.slice(-mask.length);
-    for (let i = 0; i < mask.length; i++) {
-      const m = mask[i];
-      if (m !== 'x' && m !== 'X' && m !== tail[i]) return false;
-    }
-    return true;
-  }
-
-  private nameMatches(actual: string | undefined, nameTh: string, nameEn?: string | null): boolean {
-    if (!actual) return false;
-    const clean = (s: string) => s.replace(/\s+/g, '').toLowerCase();
-    const a = clean(actual);
-    // Bank names are often masked/truncated — prefix match on the cleaned form.
-    return [nameTh, nameEn ?? ''].filter(Boolean).some((n) => {
-      const c = clean(n);
-      return c.startsWith(a.slice(0, 4)) || a.startsWith(c.slice(0, 4));
-    });
   }
 
   private currentApiKeyId(): string | null {
