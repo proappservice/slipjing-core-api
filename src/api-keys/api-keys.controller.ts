@@ -33,8 +33,10 @@ export class ApiKeysController {
   }
 
   @Post(':id/rotate')
-  rotate(@Param('id') id: string) {
-    return this.apiKeys.rotate(id);
+  async rotate(@Param('id') id: string) {
+    const { id: newId, fullKey, keyPrefix } = await this.apiKeys.rotate(id);
+    // Same one-time-full-key envelope as create.
+    return { id: newId, key: fullKey, key_prefix: keyPrefix, warning: 'Store this key now — it will not be shown again.' };
   }
 
   @Delete(':id')
