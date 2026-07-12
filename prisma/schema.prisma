@@ -1,0 +1,324 @@
+// SlipJing Phase 1 schema — CLAUDE.md §4 (incl. 2026-07-11 owner update:
+// social-login-only auth, tenant = shop, per-shop bank accounts).
+// Conventions: UUID v7 PKs (generated in app code), timestamptz everywhere,
+// money/credits are BigInt integer units. Every tenant-owned table carries
+// tenant_id + FK + composite index (tenant_id, created_at).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum TenantStatus {
+  active
+  suspended
+}
+
+enum MemberRole {
+  owner
+  member
+}
+
+enum AuthProvider {
+  google
+  facebook
+  line
+}
+
+enum LedgerReason {
+  topup
+  verify
+  refund
+  adjust
+}
+
+enum TopupStatus {
+  pending
+  paid
+  expired
+}
+
+enum VerificationStatus {
+  pending
+  verified
+  failed
+  invalid
+  duplicate
+}
+
+enum ProviderStatus {
+  up
+  down
+  degraded
+}
+
+enum BankVerifyMode {
+  number
+  name
+  both
+}
+
+enum ActorType {
+  user
+  api_key
+  system
+  admin
+}
+
+// ---------- identity & tenancy (chassis) ----------
+
+model Tenant {
+  id        String       @id @db.Uuid
+  name      String
+  logoGcsPath String?    @map("logo_gcs_path")
+  status    TenantStatus @default(active)
+  planMeta  Json?        @map("plan_meta")
+  createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt DateTime     @updatedAt @map("updated_at") @db.Timestamptz()
+
+  members              TenantMember[]
+  apiKeys              ApiKey[]
+  bankAccounts         BankAccount[]
+  ledgerEntries        CreditLedger[]
+  topupOrders          TopupOrder[]
+  verificationRequests VerificationRequest[]
+  webhookEndpoints     WebhookEndpoint[]
+
+  @@map("tenants")
+}
+
+model User {
+  id          String   @id @db.Uuid
+  email       String   @unique
+  displayName String?  @map("display_name")
+  avatarUrl   String?  @map("avatar_url")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  identities  AuthIdentity[]
+  memberships TenantMember[]
+
+  @@map("users")
+}
+
+model AuthIdentity {
+  id             String       @id @db.Uuid
+  userId         String       @map("user_id") @db.Uuid
+  provider       AuthProvider
+  providerUserId String       @map("provider_user_id")
+  emailAtLink    String?      @map("email_at_link")
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt      DateTime     @updatedAt @map("updated_at") @db.Timestamptz()
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerUserId])
+  @@index([userId])
+  @@map("auth_identities")
+}
+
+model TenantMember {
+  id        String     @id @db.Uuid
+  tenantId  String     @map("tenant_id") @db.Uuid
+  userId    String     @map("user_id") @db.Uuid
+  role      MemberRole @default(owner)
+  createdAt DateTime   @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt DateTime   @updatedAt @map("updated_at") @db.Timestamptz()
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId])
+  @@index([userId])
+  @@index([tenantId, createdAt])
+  @@map("tenant_members")
+}
+
+model BankAccount {
+  id            String         @id @db.Uuid
+  tenantId      String         @map("tenant_id") @db.Uuid
+  bankCode      String         @map("bank_code")
+  accountNumber String         @map("account_number")
+  accountNameTh String         @map("account_name_th")
+  accountNameEn String?        @map("account_name_en")
+  verifyMode    BankVerifyMode @default(both) @map("verify_mode")
+  active        Boolean        @default(true)
+  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt     DateTime       @updatedAt @map("updated_at") @db.Timestamptz()
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@map("bank_accounts")
+}
+
+model ApiKey {
+  id         String    @id @db.Uuid
+  tenantId   String    @map("tenant_id") @db.Uuid
+  name       String
+  keyPrefix  String    @map("key_prefix")
+  keyHash    String    @unique @map("key_hash")
+  lastUsedAt DateTime? @map("last_used_at") @db.Timestamptz()
+  revokedAt  DateTime? @map("revoked_at") @db.Timestamptz()
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt  DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@map("api_keys")
+}
+
+// ---------- credits (chassis) ----------
+
+model CreditLedger {
+  id           String       @id @db.Uuid
+  tenantId     String       @map("tenant_id") @db.Uuid
+  delta        BigInt
+  reason       LedgerReason
+  refType      String?      @map("ref_type")
+  refId        String?      @map("ref_id")
+  balanceAfter BigInt       @map("balance_after")
+  createdAt    DateTime     @default(now()) @map("created_at") @db.Timestamptz()
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@map("credit_ledger")
+}
+
+model CreditPackage {
+  id        String   @id @db.Uuid
+  name      String
+  credits   BigInt
+  priceThb  BigInt   @map("price_thb") // satang-free integer THB
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  topupOrders TopupOrder[]
+
+  @@map("credit_packages")
+}
+
+model TopupOrder {
+  id             String      @id @db.Uuid
+  tenantId       String      @map("tenant_id") @db.Uuid
+  packageId      String      @map("package_id") @db.Uuid
+  amountThb      BigInt      @map("amount_thb")
+  credits        BigInt
+  status         TopupStatus @default(pending)
+  paymentMethod  String      @default("promptpay") @map("payment_method")
+  paymentRef     String?     @map("payment_ref")
+  verifiedSlipId String?     @map("verified_slip_id") @db.Uuid
+  createdAt      DateTime    @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt      DateTime    @updatedAt @map("updated_at") @db.Timestamptz()
+
+  tenant  Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  package CreditPackage @relation(fields: [packageId], references: [id])
+
+  @@index([tenantId, createdAt])
+  @@map("topup_orders")
+}
+
+// ---------- slip domain ----------
+
+model VerificationRequest {
+  id                    String             @id @db.Uuid
+  tenantId              String             @map("tenant_id") @db.Uuid
+  apiKeyId              String?            @map("api_key_id") @db.Uuid
+  idempotencyKey        String             @map("idempotency_key")
+  status                VerificationStatus @default(pending)
+  transRef              String?            @map("trans_ref")
+  sendingBank           String?            @map("sending_bank")
+  amount                Decimal?           @db.Decimal(14, 2)
+  receiverAccountMasked String?            @map("receiver_account_masked")
+  receiverName          String?            @map("receiver_name")
+  checks                Json?
+  providerUsed          String?            @map("provider_used")
+  providerLatencyMs     Int?               @map("provider_latency_ms")
+  rawProviderResponse   Json?              @map("raw_provider_response")
+  imageGcsPath          String?            @map("image_gcs_path")
+  errorCode             String?            @map("error_code")
+  duplicateOfId         String?            @map("duplicate_of_id") @db.Uuid
+  createdAt             DateTime           @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt             DateTime           @updatedAt @map("updated_at") @db.Timestamptz()
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, idempotencyKey])
+  // duplicate-slip detection (§7 step 3): only completed rows participate via app logic
+  @@index([tenantId, transRef])
+  @@index([tenantId, createdAt])
+  @@map("verification_requests")
+}
+
+model Provider {
+  id        String         @id @db.Uuid
+  code      String         @unique
+  priority  Int            @default(100)
+  status    ProviderStatus @default(up)
+  config    Json?
+  createdAt DateTime       @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt DateTime       @updatedAt @map("updated_at") @db.Timestamptz()
+
+  @@map("providers")
+}
+
+// ---------- webhooks (chassis) ----------
+
+model WebhookEndpoint {
+  id        String   @id @db.Uuid
+  tenantId  String   @map("tenant_id") @db.Uuid
+  url       String
+  secret    String
+  events    String[]
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  tenant     Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  deliveries WebhookDelivery[]
+
+  @@index([tenantId, createdAt])
+  @@map("webhook_endpoints")
+}
+
+model WebhookDelivery {
+  id          String    @id @db.Uuid
+  endpointId  String    @map("endpoint_id") @db.Uuid
+  event       String
+  payload     Json
+  status      String    @default("pending")
+  attempts    Int       @default(0)
+  nextRetryAt DateTime? @map("next_retry_at") @db.Timestamptz()
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz()
+
+  endpoint WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+
+  @@index([endpointId, createdAt])
+  @@index([status, nextRetryAt])
+  @@map("webhook_deliveries")
+}
+
+// ---------- audit (chassis) ----------
+
+model AuditLog {
+  id         String    @id @db.Uuid
+  tenantId   String?   @map("tenant_id") @db.Uuid
+  actorType  ActorType @map("actor_type")
+  actorId    String?   @map("actor_id")
+  action     String
+  targetType String?   @map("target_type")
+  targetId   String?   @map("target_id")
+  metadata   Json?
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+
+  @@index([tenantId, createdAt])
+  @@map("audit_logs")
+}

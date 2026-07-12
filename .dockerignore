@@ -1,0 +1,12 @@
+node_modules
+dist
+coverage
+.env
+.env.*
+*.log
+.DS_Store
+docs
+README.md
+CLAUDE.md
+CLAUDE.th.md
+docker-compose.yml

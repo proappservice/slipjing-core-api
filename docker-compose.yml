@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: slipjing-postgres
+    environment:
+      POSTGRES_USER: slipjing
+      POSTGRES_PASSWORD: slipjing
+      POSTGRES_DB: slipjing
+    ports:
+      # 5433 on the host — 5432 is commonly taken by other local projects
+      - "5433:5432"
+    volumes:
+      - slipjing-pgdata:/var/lib/postgresql/data
+
+volumes:
+  slipjing-pgdata:
