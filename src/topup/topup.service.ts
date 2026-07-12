@@ -16,7 +16,9 @@ export class TopupService {
   constructor(private readonly prisma: PrismaService) {}
 
   async listPackages() {
-    return this.prisma.creditPackage.findMany({ where: { active: true }, orderBy: { priceThb: 'asc' } });
+    const packages = await this.prisma.creditPackage.findMany({ where: { active: true }, orderBy: { priceThb: 'asc' } });
+    // BigInt fields must be stringified before JSON serialization
+    return packages.map((p) => ({ id: p.id, name: p.name, credits: p.credits.toString(), price_thb: p.priceThb.toString() }));
   }
 
   async createOrder(packageId: string) {
@@ -43,10 +45,18 @@ export class TopupService {
   }
 
   async listOrders() {
-    return this.prisma.topupOrder.findMany({
+    const orders = await this.prisma.topupOrder.findMany({
       where: this.prisma.tenantWhere(),
       orderBy: { createdAt: 'desc' },
       take: 50,
     });
+    return orders.map((o) => ({
+      id: o.id,
+      payment_ref: o.paymentRef,
+      amount_thb: o.amountThb.toString(),
+      credits: o.credits.toString(),
+      status: o.status,
+      created_at: o.createdAt.toISOString(),
+    }));
   }
 }

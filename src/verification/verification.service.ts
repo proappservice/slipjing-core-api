@@ -136,6 +136,15 @@ export class VerificationService {
     return record;
   }
 
+  /** Dashboard: recent verifications of the current shop. */
+  async list(opts: { status?: VerificationRequest['status']; limit?: number }): Promise<VerificationRequest[]> {
+    return this.prisma.verificationRequest.findMany({
+      where: { ...this.prisma.tenantWhere(), ...(opts.status ? { status: opts.status } : {}) },
+      orderBy: { createdAt: 'desc' },
+      take: Math.min(opts.limit ?? 50, 100),
+    });
+  }
+
   /** GET /v1/usage — daily aggregates (§6). */
   async usage(from: Date, to: Date) {
     const rows = await this.prisma.$queryRaw<Array<{ day: Date; total: bigint; verified: bigint; duplicates: bigint }>>(
