@@ -75,11 +75,24 @@ export class VerificationController {
   }
 }
 
-/** Dashboard (owner session + selected shop): verification log + usage. */
+/** Dashboard (owner session + selected shop): verification log + usage + manual test. */
 @Controller('shops/verifications')
 @UseGuards(ShopGuard)
 export class ShopVerificationsController {
   constructor(private readonly verification: VerificationService) {}
+
+  /** ตรวจสลิปจากหน้า dashboard — pipeline/การหักเครดิตเหมือน /v1/verify ทุกประการ */
+  @Post()
+  async verify(@Body() dto: VerifyDto, @Headers('idempotency-key') idempotencyKey?: string) {
+    if (!idempotencyKey) throw ApiError.invalidRequest('Idempotency-Key header is required');
+    const record = await this.verification.verify({
+      payload: dto.payload,
+      idempotencyKey,
+      expectedAmount: dto.expected_amount,
+      expectedReceiver: dto.expected_receiver,
+    });
+    return mapVerification(record);
+  }
 
   @Get()
   async list(@Query('status') status?: string, @Query('limit') limit?: string) {
