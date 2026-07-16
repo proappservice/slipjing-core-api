@@ -73,10 +73,12 @@ npx prisma studio    # ดูข้อมูลใน DB
 ## สถานะ / งานถัดไป
 
 - [x] โครงโมดูลครบ + build/tests ผ่าน + boot ได้จริง
-- [x] เชื่อม Slip2Go จริงแล้ว (base: `connect.slip2go.com/api` · body: `{"payload":{"qrCode":…}}` ·
-      ตอบ HTTP 200 เสมอ + `code` string: `200000` = พบสลิป, 200401/402/403/404, 200500 fraud → map ใน adapter ·
-      โครง `data` ยืนยันจากเอกสารทางการแล้ว (transRef, dateTime, amount, receiver/sender.account.bank.account) ·
-      ⚠️ ทุก call หักโทเคนแม้ผลคือสลิปปลอม) — เหลือ sanity check กับสลิปจริง 1 ใบ
+- [x] **Provider หลัก = Thunder** (16 ก.ค. 2026 — `api.thunder.in.th/v2/verify/bank`, Bearer key,
+      body `{"payload":…}` · e2e กับสลิปจริงผ่าน: verified + amount/receiver match, latency ~170ms ·
+      โควตา trial 100 ครั้ง หมดอายุ 30 ก.ค.) · ลำดับ chain ตั้งผ่าน env `PROVIDER_CHAIN`
+      (default `thunder,slip2go` — Slip2Go เป็น failover อัตโนมัติเมื่อ Thunder ล่ม/โควตาหมด)
+- [x] Slip2Go adapter (fallback): `connect.slip2go.com/api` · `{"payload":{"qrCode":…}}` ·
+      code `200000` = พบสลิป, 200401/402/403/404, 200500 fraud · ⚠️ หักโทเคนแม้ผลเป็นสลิปปลอม
 - [ ] ยืนยันโครง TLV ของ mini-QR กับสลิปจริง (`src/verification/mini-qr.ts`)
 - [ ] อัปโหลดรูปสลิป (multipart + ถอด QR จากรูป + GCS 7-day lifecycle)
 - [ ] Rate limit ต่อ API key (Postgres fixed-window)

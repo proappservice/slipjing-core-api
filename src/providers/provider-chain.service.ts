@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { ProviderCallError, ProviderResult, SlipProviderAdapter } from './slip-provider.interface';
 import { Slip2GoAdapter } from './slip2go.adapter';
+import { ThunderAdapter } from './thunder.adapter';
 
 const BREAKER_THRESHOLD = 5; // consecutive failures → degraded
 const BREAKER_COOLDOWN_MS = 60_000;
@@ -12,9 +14,10 @@ interface BreakerState {
 
 /**
  * Failover chain + simple in-memory circuit breaker (CLAUDE.md §7 step 5).
- * Adapters are tried in priority order; timeout/5xx moves to the next one.
- * Phase 1: priorities are code-declared; the `providers` table drives status
- * reporting and will drive ordering once a second adapter exists.
+ * Order comes from env `PROVIDER_CHAIN` (comma-separated adapter codes) —
+ * default "thunder,slip2go" per the 2026-07-16 owner decision to make
+ * Thunder primary. An adapter with a missing key throws retryable and the
+ * chain falls through to the next one.
  */
 @Injectable()
 export class ProviderChainService {
@@ -22,8 +25,17 @@ export class ProviderChainService {
   private readonly adapters: SlipProviderAdapter[];
   private readonly breakers = new Map<string, BreakerState>();
 
-  constructor(slip2go: Slip2GoAdapter) {
-    this.adapters = [slip2go]; // add adapter #2 here in Phase 2
+  constructor(thunder: ThunderAdapter, slip2go: Slip2GoAdapter, config: ConfigService) {
+    const registry: Record<string, SlipProviderAdapter> = { thunder, slip2go };
+    const order = (config.get<string>('PROVIDER_CHAIN') ?? 'thunder,slip2go')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    this.adapters = order.map((code) => registry[code]).filter((a): a is SlipProviderAdapter => Boolean(a));
+    if (this.adapters.length === 0) {
+      throw new Error(`PROVIDER_CHAIN "${order.join(',')}" matches no known adapter (${Object.keys(registry).join(', ')})`);
+    }
+    this.logger.log(`provider chain: ${this.adapters.map((a) => a.code).join(' → ')}`);
   }
 
   /**
